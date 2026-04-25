@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-api
+  labels:
+    app: anomaly-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-api
+  template:
+    metadata:
+      labels:
+        app: anomaly-api
+    spec:
+      containers:
+      - name: api
+        # Use the same tag you build locally inside Minikube
+        image: k8s-anomaly-api:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000

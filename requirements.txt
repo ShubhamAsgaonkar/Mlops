@@ -1,0 +1,11 @@
+# ── Local development / training ─────────────────────────────────────────────
+pandas==2.2.3
+scikit-learn==1.6.1
+joblib==1.4.2
+
+# ── KFP pipeline compilation ──────────────────────────────────────────────────
+kfp==2.16.0
+kfp-kubernetes==2.16.0
+
+# ── MinIO client (used inside pipeline components) ────────────────────────────
+minio==7.2.15

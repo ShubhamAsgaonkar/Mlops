@@ -1,0 +1,22 @@
+model:
+  name: k8s-anomaly-detector
+  version: v1
+
+image:
+  name: k8s-anomaly-api
+  tag: v1
+  pullPolicy: IfNotPresent
+
+deployment:
+  replicas: 1
+  namespace: default
+
+lifecycle:
+  stage: staging   # staging | production
+  approved: false
+
+metadata:
+  framework: sklearn
+  dataset: k8s_logs
+  created_by: shubham
+  created_at: "2026-04-25"

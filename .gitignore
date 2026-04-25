@@ -1,0 +1,17 @@
+# Virtual environments
+kfp-env/
+
+# Large data files
+k8s_app_logs_1000.csv
+
+# Model binaries
+model.pkl
+*.pkl
+
+# Documentation / notes (not needed in repo)
+commands.md
+project_plan.md
+
+# Screenshots / images
+image.png
+image-1.png

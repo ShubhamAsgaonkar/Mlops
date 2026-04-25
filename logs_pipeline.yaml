@@ -1,0 +1,257 @@
+# PIPELINE DEFINITION
+# Name: k8s-logs-anomaly-pipeline
+components:
+  comp-load-data-from-minio:
+    executorLabel: exec-load-data-from-minio
+    outputDefinitions:
+      artifacts:
+        output_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-preprocess-op:
+    executorLabel: exec-preprocess-op
+    inputDefinitions:
+      artifacts:
+        input_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-op:
+    executorLabel: exec-train-op
+    inputDefinitions:
+      artifacts:
+        input_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        k8s_anomaly_detector:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-load-data-from-minio:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_data_from_minio
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'minio' 'pandas'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_data_from_minio(output_dataset: Output[Dataset]):\n    \"\
+          \"\"\n    Downloads k8s_app_logs_1000.csv from MinIO bucket 'devops-mlops-data'\n\
+          \    into a KFP-managed artifact path so the next step can consume it.\n\
+          \    Credentials are read from env vars injected by the Kubernetes secret\n\
+          \    'minio-secret' (keys: accesskey, secretkey).\n    \"\"\"\n    import\
+          \ os\n    from minio import Minio\n\n    client = Minio(\n        \"minio-service.kubeflow:9000\"\
+          ,\n        access_key=os.getenv(\"MINIO_ACCESS_KEY\"),\n        secret_key=os.getenv(\"\
+          MINIO_SECRET_KEY\"),\n        secure=False\n    )\n\n    client.fget_object(\n\
+          \        \"devops-mlops-data\",           # bucket name\n        \"logs/k8s_app_logs_1000.csv\"\
+          ,  # object path inside bucket\n        output_dataset.path            #\
+          \ KFP manages this path (shared storage)\n    )\n\n    import pandas as\
+          \ pd\n    df = pd.read_csv(output_dataset.path)\n    print(f\"Loaded dataset:\
+          \ {df.shape}\")\n    print(df.head())\n\n"
+        image: python:3.10
+    exec-preprocess-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - preprocess_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef preprocess_op(input_dataset: Input[Dataset], output_dataset:\
+          \ Output[Dataset]):\n    \"\"\"\n    Parses latency, response codes, p99\
+          \ latency, error flags, and service\n    category from the raw log message\
+          \ column using regex, then writes\n    the feature matrix as a CSV for the\
+          \ training step.\n    \"\"\"\n    import re\n    import pandas as pd\n\n\
+          \    def extract_latency(msg):\n        m = re.search(r'(\\d+)ms', str(msg))\n\
+          \        return float(m.group(1)) if m else 0.0\n\n    def extract_response_code(msg):\n\
+          \        for pattern in [\n            r'(?:status=|response=)(\\d{3})',\n\
+          \            r'Completed\\s+(\\d{3})\\s+',\n            r'\\b([45]\\d{2})\\\
+          b',\n        ]:\n            m = re.search(pattern, str(msg))\n        \
+          \    if m:\n                return int(m.group(1))\n        return 200\n\
+          \n    def extract_p99_latency(msg):\n        m = re.search(r'p99=(\\d+)ms',\
+          \ str(msg))\n        return float(m.group(1)) if m else 0.0\n\n    df =\
+          \ pd.read_csv(input_dataset.path)\n    # guard against 'imestamp' header\
+          \ typo\n    df.columns = [c.lstrip('i') if c.startswith('imestamp') else\
+          \ c for c in df.columns]\n\n    df['latency']       = df['message'].apply(extract_latency)\n\
+          \    df['response_code'] = df['message'].apply(extract_response_code)\n\
+          \    df['p99_latency']   = df['message'].apply(extract_p99_latency)\n\n\
+          \    anomaly_kw = r'(?i)(error|crashloopbackoff|oomkilled|imagepullbackoff|timeout|refused|deadlock|503|502|segmentation\
+          \ fault|latency spike)'\n    df['is_error'] = (\n        df['log_level'].isin(['ERROR',\
+          \ 'WARN']) |\n        df['message'].str.contains(anomaly_kw, regex=True,\
+          \ na=False)\n    ).astype(int)\n\n    service_map = {'nginx': 0, 'backend':\
+          \ 1, 'auth': 2, 'payments': 3, 'orders': 4}\n    df['service'] = df['pod_name'].apply(\n\
+          \        lambda x: next((v for k, v in service_map.items() if k in str(x)),\
+          \ -1)\n    )\n\n    features = df[['latency', 'response_code', 'p99_latency',\
+          \ 'is_error', 'service']].fillna(0)\n    features.to_csv(output_dataset.path,\
+          \ index=False)\n    print(f\"Preprocessed features saved  shape={features.shape}\"\
+          )\n\n"
+        image: python:3.10
+    exec-train-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib' 'minio'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_op(input_dataset: Input[Dataset], k8s_anomaly_detector:\
+          \ Output[Model]):\n    \"\"\"\n    Trains an IsolationForest on the feature\
+          \ matrix.\n    contamination=0.25 matches the dataset's known ~25 % anomaly\
+          \ rate.\n    \"\"\"\n    import pandas as pd\n    from sklearn.ensemble\
+          \ import IsolationForest\n    import joblib\n\n    df = pd.read_csv(input_dataset.path)\n\
+          \n    model = IsolationForest(contamination=0.25, random_state=42, n_estimators=100)\n\
+          \    model.fit(df)\n\n    preds = model.predict(df)\n    n_anom = (preds\
+          \ == -1).sum()\n    print(f\"Anomalies detected: {n_anom}/{len(preds)} ({n_anom\
+          \ / len(preds) * 100:.1f}%)\")\n\n    joblib.dump(model, k8s_anomaly_detector.path)\n\
+          \    print(f\"Model saved to KFP artifact path: {k8s_anomaly_detector.path}\"\
+          )\n\n    # \u2500\u2500 Also upload explicitly as .pkl to devops-mlops-data\
+          \ bucket \u2500\u2500\n    import os\n    from minio import Minio\n\n  \
+          \  minio_client = Minio(\n        \"minio-service.kubeflow:9000\",\n   \
+          \     access_key=os.getenv(\"MINIO_ACCESS_KEY\"),\n        secret_key=os.getenv(\"\
+          MINIO_SECRET_KEY\"),\n        secure=False\n    )\n    minio_client.fput_object(\n\
+          \        \"devops-mlops-data\",\n        \"models/k8s_anomaly_detector.pkl\"\
+          ,\n        k8s_anomaly_detector.path\n    )\n    print(\"Model uploaded\
+          \ to MinIO: devops-mlops-data/models/k8s_anomaly_detector.pkl\")\n\n"
+        image: python:3.10
+pipelineInfo:
+  name: k8s-logs-anomaly-pipeline
+root:
+  dag:
+    tasks:
+      load-data-from-minio:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-data-from-minio
+        taskInfo:
+          name: load-data-from-minio
+      preprocess-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-preprocess-op
+        dependentTasks:
+        - load-data-from-minio
+        inputs:
+          artifacts:
+            input_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_dataset
+                producerTask: load-data-from-minio
+        taskInfo:
+          name: preprocess-op
+      train-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-op
+        dependentTasks:
+        - preprocess-op
+        inputs:
+          artifacts:
+            input_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_dataset
+                producerTask: preprocess-op
+        taskInfo:
+          name: train-op
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-load-data-from-minio:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: MINIO_ACCESS_KEY
+              secretKey: accesskey
+            - envVar: MINIO_SECRET_KEY
+              secretKey: secretkey
+            optional: false
+            secretName: minio-secret
+            secretNameParameter:
+              runtimeValue:
+                constant: minio-secret
+        exec-train-op:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: MINIO_ACCESS_KEY
+              secretKey: accesskey
+            - envVar: MINIO_SECRET_KEY
+              secretKey: secretkey
+            optional: false
+            secretName: minio-secret
+            secretNameParameter:
+              runtimeValue:
+                constant: minio-secret
