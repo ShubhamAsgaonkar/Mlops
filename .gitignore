@@ -10,7 +10,6 @@ k8s_app_logs_1000.csv
 
 # Model binaries
 model.pkl
-*.pkl
 
 # Documentation / notes (not needed in repo)
 commands.md
