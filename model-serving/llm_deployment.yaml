@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app: vllm-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-app
+  template:
+    metadata:
+      labels:
+        app: vllm-app
+    spec:
+      containers:
+      - name: vllm-openai
+        image: vllm/vllm-openai:latest
+        command:
+        - python3
+        - -m
+        - vllm.entrypoints.openai.api_server
+        - --model
+        - meta-llama/Llama-3.2-3B-Instruct
+        - --trust-remote-code
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: HF_TOKEN
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+          requests:
+            nvidia.com/gpu: "1"
+        readinessProbe:
+          httpGet:
+            path: /v1/models
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10

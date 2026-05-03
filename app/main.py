@@ -2,6 +2,8 @@ import os
 import re
 import joblib
 import pandas as pd
+import json
+import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -48,6 +50,17 @@ class DetectResponse(BaseModel):
     anomaly_score: float
     message: str
     details: dict
+
+class PredictRawRequest(BaseModel):
+    content: str
+
+class PredictRawResponse(BaseModel):
+    pod_name: Optional[str] = None
+    anomaly: bool = True
+    score: float = 0.91
+    message: str
+    reasoning: str
+    solution: str
 
 # --- Lifecycle ---
 
@@ -121,6 +134,70 @@ def detect(request: DetectRequest):
             "features_fed_to_model": features,
         }
     )
+
+@app.post("/predict_raw", response_model=PredictRawResponse)
+def predict_raw(request: PredictRawRequest):
+    vllm_url = os.getenv("VLLM_URL", "http://llm-service:80/v1/chat/completions")
+    
+    prompt = f"""
+    You are a Kubernetes expert and MLOps log analyzer.
+    Analyze the following raw log or error message from a user:
+    
+    "{request.content}"
+    
+    Extract the following information and return ONLY a valid JSON object with these exact keys:
+    - "pod_name": (string) The name of the pod mentioned, or "unknown" if not found.
+    - "anomaly": (boolean) Always true for errors/issues.
+    - "score": (float) A simulated anomaly score between 0.8 and 1.0 for issues.
+    - "message": (string) A short summary of what the error is.
+    - "reasoning": (string) Detailed technical reasoning explaining why this error occurred based on the log.
+    - "solution": (string) A clear, actionable step-by-step solution to fix the issue.
+    
+    Do not wrap the response in markdown blocks like ```json. Return just the raw JSON.
+    """
+    
+    try:
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": "meta-llama/Llama-3.2-3B-Instruct",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant that outputs only valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 512
+        }
+        
+        response = requests.post(vllm_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        res_json = response.json()
+        
+        text = res_json['choices'][0]['message']['content'].strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        result = json.loads(text.strip())
+        return PredictRawResponse(
+            pod_name=result.get("pod_name", "unknown"),
+            anomaly=result.get("anomaly", True),
+            score=result.get("score", 0.91),
+            message=result.get("message", "Error analyzed"),
+            reasoning=result.get("reasoning", "No reasoning provided."),
+            solution=result.get("solution", "No solution provided.")
+        )
+    except Exception as e:
+        return PredictRawResponse(
+            pod_name="unknown",
+            anomaly=True,
+            score=0.91,
+            message="Error analyzing log with LLM",
+            reasoning=f"An exception occurred during LLM processing: {str(e)}",
+            solution="Check the LLM API connectivity or the parsing logic."
+        )
 
 if __name__ == "__main__":
     import uvicorn

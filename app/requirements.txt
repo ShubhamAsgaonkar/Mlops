@@ -5,3 +5,4 @@ scikit-learn==1.6.1
 joblib==1.4.2
 pydantic==2.10.6
 minio==7.2.15
+google-generativeai==0.8.3
