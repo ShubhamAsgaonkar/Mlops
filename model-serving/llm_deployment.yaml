@@ -23,6 +23,8 @@ spec:
         - vllm.entrypoints.openai.api_server
         - --model
         - meta-llama/Llama-3.2-3B-Instruct
+        - --device
+        - cpu
         - --trust-remote-code
         env:
         - name: HF_TOKEN
